@@ -1,0 +1,65 @@
+# Throwaway spike workflow for plan Step 1.5; Step 1.7 deletes it.
+name: spike-dmg
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/m1-spikes
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2
+        with:
+          php-version: '8.4'
+          extensions: zip, pdo_sqlite
+          tools: composer:v2
+          coverage: none
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+
+      - name: Install PHP dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Prepare environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      - name: Install NativePHP Electron dependencies
+        run: php artisan native:install --force --no-interaction
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build Apple Silicon DMG (unsigned)
+        run: php artisan native:build mac arm64 --no-interaction -v
+
+      - name: Show build output
+        run: ls -la nativephp/electron/dist
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: cookbook-dmg
+          path: nativephp/electron/dist/*.dmg
+          if-no-files-found: error
+          retention-days: 3
