@@ -212,3 +212,12 @@ From https://nativephp.com/docs/desktop/2/publishing/updating: "macOS: Automatic
 The published `config/nativephp.php` (https://nativephp.com/docs/desktop/2/getting-started/configuration) configures the updater with `NATIVEPHP_UPDATER_ENABLED` (default `true`) and `NATIVEPHP_UPDATER_PROVIDER` (default `spaces`). The `github` provider reads `GITHUB_REPO`, `GITHUB_OWNER`, `GITHUB_TOKEN`, `GITHUB_V_PREFIXED_TAG_NAME` (default `true`), `GITHUB_PRIVATE` (default `false`), `GITHUB_AUTOUPDATE_TOKEN` (read-only token for private repositories), `GITHUB_CHANNEL` (default `latest`) and `GITHUB_RELEASE_TYPE` (default `draft`). `GITHUB_*` is in `cleanup_env_keys`, so those values are stripped from the bundled `.env`.
 
 Spec risk 6 (the updater switches on cleanly once signing exists) cannot be tested without an Apple Developer ID and stays unverified. One thing for Milestone 8: the updater defaults to enabled, so the unsigned release build should set `NATIVEPHP_UPDATER_ENABLED=false` until signing exists, and the in-app banner from Step 8.3 does the update notice instead. Whether the enabled updater causes errors in the current unsigned build was not checked.
+
+## Gate decisions
+
+Decided by the user at Step 1.7 on 2026-11-09:
+
+- The release workflow re-signs the app ad hoc without the hardened runtime after `native:build` and rebuilds the DMG (Step 8.1).
+- `remove_project` and `reset_progress` require `confirm: true` on top of the destructive annotation (Step 6.1).
+- CI checks run on `ubuntu-latest`; macOS runs only release builds (Step 2.8).
+- Unsigned builds set `NATIVEPHP_UPDATER_ENABLED=false`; the in-app banner handles update notices (Step 8.1).
