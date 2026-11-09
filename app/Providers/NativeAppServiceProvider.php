@@ -2,8 +2,12 @@
 
 namespace App\Providers;
 
+use App\Events\OpenWindowClicked;
 use Native\Desktop\Contracts\ProvidesPhpIni;
+use Native\Desktop\Facades\App;
 use Native\Desktop\Facades\ChildProcess;
+use Native\Desktop\Facades\Menu;
+use Native\Desktop\Facades\MenuBar;
 use Native\Desktop\Facades\Window;
 
 class NativeAppServiceProvider implements ProvidesPhpIni
@@ -15,6 +19,21 @@ class NativeAppServiceProvider implements ProvidesPhpIni
     public function boot(): void
     {
         Window::open();
+
+        // The app keeps running from the menu bar after its window closes, because the MCP server lives in it.
+        MenuBar::create()
+            ->onlyShowContextMenu()
+            ->showDockIcon()
+            ->withContextMenu(Menu::make(
+                Menu::label('Open Cookbook')->event(OpenWindowClicked::class),
+                Menu::separator(),
+                Menu::quit('Quit Cookbook'),
+            ));
+
+        // Only the installed app registers itself; in development this would add the dev Electron binary to the login items.
+        if (app()->isProduction()) {
+            App::openAtLogin(true);
+        }
 
         // NativePHP's own server runs on a random port, so MCP gets a second listener on a fixed one.
         ChildProcess::php(

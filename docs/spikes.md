@@ -134,3 +134,30 @@ Consequences: any local process can reach NativePHP's own server on its random p
 - The `cookbook-spike` registration stays in place for Steps 1.4 and 1.5 and is removed at Step 1.7.
 
 Decision: an HTTP MCP server on a fixed localhost port works inside the running app as a NativePHP child process. Milestone 6 keeps the HTTP transport.
+
+## Background running
+
+Second half of spec risk 2. Tried on 2026-11-09 in `php artisan native:run`.
+
+### What was built
+
+`NativeAppServiceProvider::boot()` now creates a menu bar item with `MenuBar::create()->onlyShowContextMenu()->showDockIcon()` and a context menu with "Open Cookbook" (event `App\Events\OpenWindowClicked`, which extends `MenuItemClicked`; the listener `App\Listeners\OpenMainWindow` calls `Window::open()`), a separator and "Quit Cookbook" (`Menu::quit()`). The dock icon stays, because the app also has a normal window. Launch at login is `App::openAtLogin(true)`, called only when `app()->isProduction()`, so development runs do not register the dev Electron binary as a login item.
+
+### Result: closing the window quits the app in development
+
+With the window closed (by the user with the close button, and by `POST <api>/window/close {"id":"main"}` to NativePHP's Electron API with the secret from the PHP process environment), Electron ran its quit path: the run log shows `Process [mcp] stopping`, `PHP server exited` and both child processes exiting, and the MCP listener on 47123 disappeared. It reproduced on every try.
+
+What I ruled out:
+
+- The menu bar code is not the cause: the Step 1.3 provider without any menu bar quits the same way.
+- NativePHP's PHP side never calls `App::quit()` (`grep` for `quit()` in `vendor/nativephp/desktop/src` finds only the facade).
+- The JavaScript `window-all-closed` listeners do not quit. Read from the live main process over the inspector (`V8_INSPECTOR_PORT=9339`, which electron-vite passes to Electron as `--inspect`), there are two: Electron's default `()=>{1===a.listenerCount("window-all-closed")&&a.quit()}`, which only quits when it is the only listener, and NativePHP's, which only quits off macOS.
+- With `app.quit` and `app.exit` wrapped at runtime over the inspector, the first call seen was NativePHP's own `app.quit()` inside its `before-quit` handler (`out/main/index.js:2848`), after the quit had started. The quit is therefore started natively, not from JavaScript.
+
+The cause is not known. The NativePHP docs (https://nativephp.com/docs/desktop/2/getting-started/development) say `native:run` stops when the application quits, but say nothing about closing the window. Decision by the user: park it and test window close on the installed DMG in Step 1.5, where the app runs as a real bundle instead of `electron .`. If the installed app quits too, the fallback the user would decide on is keeping a hidden window alive.
+
+Not verified yet: that the menu bar icon and its menu appear (the user's check ended at the window close), that "Open Cookbook" reopens the window, and launch at login, which only runs in the installed app (Step 1.5).
+
+### Other note
+
+The development storage folder is `~/Library/Application Support/laravel-dev`, named after `APP_NAME=Laravel`, and already held a `browser.log` from 2026-10-02, so it is shared with other NativePHP projects that keep the default name. A temporary debug listener during this spike looped through NativePHP's log forwarding and grew `laravel.log` there to about 4.6 MB; it was removed before the commit. Setting `APP_NAME` and `NATIVEPHP_APP_ID` would give this app its own folder; that belongs to Step 1.5's build.
