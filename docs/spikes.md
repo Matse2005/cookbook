@@ -76,3 +76,61 @@ All of these pass on the clean scaffold: `./vendor/bin/pest` (2 tests), `npx vp 
 `php artisan native:run --no-interaction` started Electron from `vendor/nativephp/desktop/resources/electron` and PHP's server on `127.0.0.1:8100` (`lsof -iTCP -sTCP:LISTEN`). The user confirmed the window showed the starter welcome page. No screenshot is committed: `screencapture -l <window id>` failed with "could not create image from window" because the terminal has no screen recording permission.
 
 Decision: the starter kit and NativePHP fit together. The fallback (plain Laravel with Inertia added by hand) is not needed.
+
+## MCP in NativePHP
+
+Spec risk 1, plus the push question. Tried on 2026-11-09 with `laravel/mcp` v1.1.2 and `nativephp/desktop` 2.4.0, in `php artisan native:run`.
+
+### What was built
+
+- `laravel/mcp` registers `Mcp::web('/mcp', CookbookServer::class)` in `routes/ai.php` behind `App\Http\Middleware\RequireMcpToken`, which compares the bearer token with `hash_equals` and answers 401 otherwise.
+- Two spike tools: `ping` (returns `pong` and dispatches `App\Events\McpPinged`) and `wipe` (annotated `#[IsDestructive]`, changes nothing).
+- The token comes from `config('cookbook.mcp_token')` when set, else from `storage/app/private/mcp-token`, created with 48 random characters on first use. A file is used because two PHP processes need the same value; Step 6.2 moves it to the settings table.
+- The second listener is a NativePHP child process started in `NativeAppServiceProvider::boot()`: `ChildProcess::php(['-S', '127.0.0.1:47123', base_path('bootstrap/mcp-router.php')], alias: 'mcp', persistent: true)`. The port comes from `config('cookbook.mcp_port')` (`COOKBOOK_MCP_PORT`, default 47123). The router script answers 404 for every path except `/mcp`, sets the `X-NativePHP-Secret` header from its own `NATIVEPHP_SECRET` environment variable and hands the request to `public/index.php`. NativePHP passes `NATIVEPHP_RUNNING`, `NATIVEPHP_SECRET` and `NATIVEPHP_API_URL` to PHP child processes (`electron-plugin/src/server/api/childProcess.ts` `startPhpProcess`, `server/php.ts` `getDefaultEnvironmentVariables`).
+- Kept test: `tests/Feature/Mcp/PingToolTest.php` (no token, wrong token and an empty token get 401; the right token gets `pong`).
+
+### Evidence
+
+`lsof -nP -iTCP:47123 -sTCP:LISTEN` while the app ran:
+
+```
+php     54587 matsevh    5u  IPv4 ...  TCP 127.0.0.1:47123 (LISTEN)
+```
+
+NativePHP's own server listened on `127.0.0.1:8100` in the same run. Calls with curl:
+
+```
+POST /mcp without token        -> 401 {"error":"Unauthorized"}
+POST /mcp with Bearer <token>  -> 200 {"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","content":[{"type":"text","text":"pong"}],...}}
+GET /                          -> 404 Not found
+POST to the en0 address:47123  -> connection refused
+```
+
+Registered with `claude mcp add --transport http cookbook-spike http://127.0.0.1:47123/mcp --header "Authorization: Bearer <token>"`, local scope for this project; `claude mcp list` reported `cookbook-spike: http://127.0.0.1:47123/mcp (HTTP) - ✔ Connected`. A headless Claude Code session, `claude -p '...call the ping tool...' --allowedTools 'mcp__cookbook-spike__ping'`, returned `pong` with no permission denials.
+
+### Destructive tool behaviour
+
+- `claude -p '...call the wipe tool...'` without an allow rule: the call was denied (`permission_denials: ['mcp__cookbook-spike__wipe']`). In an interactive session that is a permission prompt.
+- The same with `--allowedTools 'mcp__cookbook-spike'`, which allows every tool on the server: `wipe` ran and returned `nothing was wiped`, with no denial.
+
+So Claude Code asks before `wipe` the way it asks before any MCP tool that is not allowed, and the `destructiveHint` annotation adds no confirmation of its own. Once a user allows the whole server, `remove_project` and `reset_progress` would run without a prompt. That is the case the plan's revisit names: Step 6.1 would add a required `confirm: true` argument to both tools. Decision for the Step 1.7 gate.
+
+### Push to the window
+
+`McpPinged` implements `ShouldBroadcastNow` on `new Channel('nativephp')`. NativePHP's `Native\Desktop\Events\EventWatcher` posts such events to the Electron API, and the child process has the API URL and secret, so a ping arriving on port 47123 reaches the window. `resources/js/components/mcp-ping-spike.tsx` listens with `window.Native.on('App\\Events\\McpPinged', ...)` after `native:init`. After a ping at 17:40:48 UTC the user saw the line on the welcome page change to that time without a reload. Step 6.9 can use broadcasting on the `nativephp` channel; the change counter fallback is not needed.
+
+### Unexpected finding: the 403 guard does not run
+
+The plan assumed NativePHP's `PreventRegularBrowserAccess` answers 403 without the secret. In this app it never runs. `POST http://127.0.0.1:8100/mcp` with the token and without the NativePHP secret returned 200, and `GET /` on port 8100 returned 200. Booting the app with `NATIVEPHP_RUNNING=true` and checking the HTTP kernel gave `hasMiddleware(PreventRegularBrowserAccess::class) === false`.
+
+The cause: `NativeServiceProvider::packageRegistered()` pushes the middleware onto `$this->app->make(Illuminate\Foundation\Http\Kernel::class)`, but in a Laravel 13 app the singleton is bound to the contract `Illuminate\Contracts\Http\Kernel`, and `make()` of the concrete class returns a different instance (`===` is false). The guard is added to a kernel that serves no requests.
+
+Consequences: any local process can reach NativePHP's own server on its random port without the secret. That is upstream behaviour and outside this plan's scope. The second listener is still needed, because the main port is random. Setting the secret header in `mcp-router.php` is harmless now and keeps working if NativePHP fixes the guard. Whether the packaged build behaves the same is checked in Step 1.5.
+
+### Other notes
+
+- `php -S` writes a line per request to stderr, which NativePHP rebroadcasts as `ChildProcess\ErrorReceived` and the log broadcaster writes to `laravel.log` on every MCP call. Milestone 6 should quiet this (for example `-q` on `php -S`).
+- The dev app's storage is `~/Library/Application Support/laravel-dev/storage`, so the dev token file is there, not in the repository.
+- The `cookbook-spike` registration stays in place for Steps 1.4 and 1.5 and is removed at Step 1.7.
+
+Decision: an HTTP MCP server on a fixed localhost port works inside the running app as a NativePHP child process. Milestone 6 keeps the HTTP transport.
