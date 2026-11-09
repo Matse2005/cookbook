@@ -2,6 +2,8 @@
 
 Results of the Milestone 1 spikes. Each section says what was tried, what happened, the evidence and the decision. Tokens appear as `<token>`, never as real values.
 
+Spike code removed in Step 1.7 (commit `0f32e72`): the `wipe` and `spike_git_branch` tools, `McpPinged`, the welcome page ping line and `.github/workflows/spike-dmg.yml`. The `ping` tool, its server, the token middleware, the router and the child process stay until Step 6.2 replaces `ping`. Sections below describe the code as it was during each spike.
+
 ## NativePHP and laravel/mcp versions
 
 Checked on 2026-11-09. Package facts come from `composer show -a <package>` against Packagist; documentation facts come from the NativePHP 2.x docs at https://nativephp.com/docs/desktop/2/.
@@ -110,7 +112,7 @@ Registered with `claude mcp add --transport http cookbook-spike http://127.0.0.1
 
 ### Destructive tool behaviour
 
-- `claude -p '...call the wipe tool...'` without an allow rule: the call was denied (`permission_denials: ['mcp__cookbook-spike__wipe']`). In an interactive session that is a permission prompt.
+- `claude -p '...call the wipe tool...'` without an allow rule: the call was denied (`permission_denials: ['mcp__cookbook-spike__wipe']`). In an interactive session this should be a permission prompt (not tested).
 - The same with `--allowedTools 'mcp__cookbook-spike'`, which allows every tool on the server: `wipe` ran and returned `nothing was wiped`, with no denial.
 
 So Claude Code asks before `wipe` the way it asks before any MCP tool that is not allowed, and the `destructiveHint` annotation adds no confirmation of its own. Once a user allows the whole server, `remove_project` and `reset_progress` would run without a prompt. That is the case the plan's revisit names: Step 6.1 would add a required `confirm: true` argument to both tools. Decision for the Step 1.7 gate.
@@ -123,7 +125,7 @@ So Claude Code asks before `wipe` the way it asks before any MCP tool that is no
 
 The plan assumed NativePHP's `PreventRegularBrowserAccess` answers 403 without the secret. In this app it never runs. `POST http://127.0.0.1:8100/mcp` with the token and without the NativePHP secret returned 200, and `GET /` on port 8100 returned 200. Booting the app with `NATIVEPHP_RUNNING=true` and checking the HTTP kernel gave `hasMiddleware(PreventRegularBrowserAccess::class) === false`.
 
-The cause: `NativeServiceProvider::packageRegistered()` pushes the middleware onto `$this->app->make(Illuminate\Foundation\Http\Kernel::class)`, but in a Laravel 13 app the singleton is bound to the contract `Illuminate\Contracts\Http\Kernel`, and `make()` of the concrete class returns a different instance (`===` is false). The guard is added to a kernel that serves no requests.
+The cause: `NativeServiceProvider::packageRegistered()` (`vendor/nativephp/desktop/src/NativeServiceProvider.php:64`, push at `:109`) pushes the middleware onto `$this->app->make(Illuminate\Foundation\Http\Kernel::class)`, but the app binds the singleton to the contract `Illuminate\Contracts\Http\Kernel` (`ApplicationBuilder::withKernels()`, `vendor/laravel/framework/src/Illuminate/Foundation/Configuration/ApplicationBuilder.php:57-61`), and `make()` of the concrete class builds a fresh instance every time (`===` is false). The guard is added to a kernel that serves no requests. Verified on Laravel 13; other versions that use `bootstrap/app.php` probably behave the same, but that was not checked.
 
 Consequences: any local process can reach NativePHP's own server on its random port without the secret. That is upstream behaviour and outside this plan's scope. The second listener is still needed, because the main port is random. Setting the secret header in `mcp-router.php` is harmless now and keeps working if NativePHP fixes the guard. Whether the packaged build behaves the same is checked in Step 1.5.
 
@@ -150,11 +152,11 @@ With the window closed (by the user with the close button, and by `POST <api>/wi
 What I ruled out:
 
 - The menu bar code is not the cause: the Step 1.3 provider without any menu bar quits the same way.
-- NativePHP's PHP side never calls `App::quit()` (`grep` for `quit()` in `vendor/nativephp/desktop/src` finds only the facade).
+- NativePHP's PHP side never calls `App::quit()` (`grep` for `quit()` in `vendor/nativephp/desktop/src` finds only the `App::quit()` definition at `src/App.php:15` and its facade docblock, with no caller).
 - The JavaScript `window-all-closed` listeners do not quit. Read from the live main process over the inspector (`V8_INSPECTOR_PORT=9339`, which electron-vite passes to Electron as `--inspect`), there are two: Electron's default `()=>{1===a.listenerCount("window-all-closed")&&a.quit()}`, which only quits when it is the only listener, and NativePHP's, which only quits off macOS.
 - With `app.quit` and `app.exit` wrapped at runtime over the inspector, the first call seen was NativePHP's own `app.quit()` inside its `before-quit` handler (`out/main/index.js:2848`), after the quit had started. The quit is therefore started natively, not from JavaScript.
 
-Update after Step 1.5: the cause is how the process is started, not NativePHP. A three-line Electron app (one window, an empty `window-all-closed` handler) started from a shell quits as soon as no window is visible, on Electron 40.10.2 (NativePHP's) and on Electron 45.2.3 alike, also with a hidden extra window, a tray icon, `hide()` instead of `close()`, or `-NSDisableAutomaticTermination YES`. Started through LaunchServices (`open -n Electron.app --args <app>`), the same app stays alive after its window closes. `native:run` starts Electron as a child of a shell, so it always quits on window close. The packaged app launched with `open` survives the window close and keeps answering MCP (Step 1.5). Why macOS 27 ends a shell-started app without visible windows is not known; it does not affect the installed app.
+Update after Step 1.5: the cause is how the process is started, not NativePHP. A three-line Electron app (one window, an empty `window-all-closed` handler) started from a shell quits as soon as no window is visible, on Electron 40.10.2 (NativePHP's) and on Electron 45.2.3 alike, also with a hidden extra window, a tray icon, `hide()` instead of `close()`, or `-NSDisableAutomaticTermination YES`. Started through LaunchServices (`open -n Electron.app --args <app>`), the same app stays alive after its window closes. On this machine (macOS 27.0.1), `native:run` starts Electron as a child of a shell, and in every try that made it quit on window close. The packaged app launched with `open` survives the window close and keeps answering MCP (Step 1.5). Why macOS 27 ends a shell-started app without visible windows is not known; it does not affect the installed app.
 
 The earlier note, kept for the record: the cause was not known. The NativePHP docs (https://nativephp.com/docs/desktop/2/getting-started/development) say `native:run` stops when the application quits, but say nothing about closing the window. Decision by the user: park it and test window close on the installed DMG in Step 1.5, where the app runs as a real bundle instead of `electron .`. If the installed app quits too, the fallback the user would decide on is keeping a hidden window alive.
 
@@ -172,14 +174,14 @@ Spec risk 4. Tried on 2026-11-09 on macOS 27.0.1 (build 26A434).
 
 `.github/workflows/spike-dmg.yml` runs on `macos-latest` on pushes to `feature/m1-spikes` (GitHub only offers `workflow_dispatch` for workflow files on the default branch, which this one is not). Run 42669608180 was green in 5 minutes 29 seconds (`run_duration_ms: 329000`) and uploaded `Cookbook-1.0.0-arm64.dmg` (146 MB). App name and bundle id come from `.env.example`: `APP_NAME=Cookbook`, `NATIVEPHP_APP_ID=be.matsevh.cookbook` (user decision).
 
-Without Apple credentials the build does not fail. The log shows `falling back to ad-hoc signature for macOS application code signing`, `identityName=-`, and `skipping notarizing, NATIVEPHP_APPLE_ID, NATIVEPHP_APPLE_ID_PASS and NATIVEPHP_APPLE_TEAM_ID env variables must be set.` It also warns `* * * INSECURE BUILD * * * Secure app bundle not found! Building with exposed source files.` (https://nativephp.com/docs/publishing/building#security), which Milestone 8 has to look at.
+Without Apple credentials the build does not fail. The log shows `falling back to ad-hoc signature for macOS application code signing`, `identityName=-`, and `skipping notarizing, NATIVEPHP_APPLE_ID, NATIVEPHP_APPLE_ID_PASS and NATIVEPHP_APPLE_TEAM_ID env variables must be set.` It also warns `* * * INSECURE BUILD * * * Secure app bundle not found! Building with exposed source files.` (the build log links https://nativephp.com/docs/publishing/building#security; the guide itself is at https://nativephp.com/docs/desktop/2/digging-deeper/security), which Milestone 8 has to look at.
 
 ### Install
 
 - Downloaded through a browser (Zen), the app carries `com.apple.quarantine` and macOS refuses it: "Apple could not verify “Cookbook” is free of malware". `spctl -a -vv -t exec` says `rejected`. Expected for an unnotarized app.
 - After `xattr -dr com.apple.quarantine` (run by the user), the app crashes at launch. The crash report (`Cookbook-2026-11-09-191917.ips`) says `Library not loaded: @rpath/Electron Framework.framework/Electron Framework ... not valid for use in process: mapping process and mapped file (non-platform) have different Team IDs`. The ad-hoc signature carries the hardened runtime (`flags=0x10002(adhoc,runtime)`), so library validation is on, and ad-hoc signatures have no Team ID. The entitlements in the build are `allow-jit`, `allow-unsigned-executable-memory` and `allow-dyld-environment-variables`, without `com.apple.security.cs.disable-library-validation`.
 - The same app re-signed ad hoc without the hardened runtime (`codesign --force --deep --sign -`, giving `flags=0x2(adhoc)`) starts normally. This is the plan's revisit case for Step 1.5: the build as produced does not open; an ad-hoc re-sign in the workflow does. Decision at the Step 1.7 gate.
-- `curl` and `gh run download` do not set the quarantine flag (the `gh`-downloaded DMG had only `com.apple.provenance`), so `install.sh` downloading with `curl` may not need the `xattr` step at all. Not yet tested end to end.
+- The `gh`-downloaded DMG had only `com.apple.provenance`, no quarantine flag. `curl` is not expected to set it either, but that is not tested, so `install.sh` may not need the `xattr` step. The NativePHP building page warns that without notarization the app "will only run on the development machine" (https://nativephp.com/docs/desktop/2/publishing/building); that matches the Gatekeeper refusal above and is what removing the quarantine flag works around.
 
 ### The re-signed app, launched with `open`
 
