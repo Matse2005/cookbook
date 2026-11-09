@@ -2,7 +2,6 @@
 
 namespace App\Mcp\Tools;
 
-use App\Events\McpPinged;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
@@ -16,8 +15,6 @@ class PingTool extends Tool
 {
     public function handle(Request $request): Response
     {
-        McpPinged::dispatch(now()->toIso8601String());
-
         return Response::text('pong');
     }
 
