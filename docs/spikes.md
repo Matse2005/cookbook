@@ -188,3 +188,9 @@ Without Apple credentials the build does not fail. The log shows `falling back t
 - `spike_git_branch` returns exit code 0 and `feature/m1-spikes` for `~/Personal/Cookbook`, a folder outside the bundle. The `PATH` it sees includes the user's shell paths, because NativePHP calls `fix-path` at startup (`resources/electron/src/main/index.js`).
 - `GET /` on NativePHP's own port returns 200 without the secret, so the 403 guard is also off in the packaged build.
 - `App::openAtLogin()` reports `{"open":true}` with `APP_ENV=production`.
+- Menu bar: with the window closed the menu bar item was there and "Open Cookbook" brought the window back (checked by the user).
+- Launch at login: after a logout and login (`last`: new console session at 20:34), Cookbook was running from 20:35:05 with `launchd` (pid 1) as its parent. `ping` returned `pong`, and `spike_git_branch` returned exit code 0 and `feature/m1-spikes`, so git is found from a login-started app; NativePHP's `fix-path` gives it the login shell `PATH`. The login item points at the re-signed test copy; it is removed at Step 1.7.
+
+### Decision
+
+The free route works, with one change: the DMG as built does not open, because ad-hoc signing with the hardened runtime breaks library validation. Re-signed ad hoc without the hardened runtime, the installed app opens, stays alive with its window closed, serves MCP and starts at login. How the release workflow produces that build (an ad-hoc re-sign step after `native:build`, or adding `com.apple.security.cs.disable-library-validation`) is a revisit decision for the Step 1.7 gate.
