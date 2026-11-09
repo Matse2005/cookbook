@@ -44,3 +44,35 @@ https://nativephp.com/docs/desktop/2/getting-started/configuration shows the pub
 ### Building requirements
 
 The installation page lists PHP 8.3+, Laravel 11+, Node 22+ and macOS 12+. It does not say whether Xcode or the Command Line Tools are required. Signing and notarization read `NATIVEPHP_APPLE_ID`, `NATIVEPHP_APPLE_ID_PASS` and `NATIVEPHP_APPLE_TEAM_ID` (https://nativephp.com/docs/desktop/2/publishing/building). The docs do not say whether a build without those credentials skips signing or fails, and they have no GitHub Actions example. Step 1.5 finds out.
+
+## Starter kit fit
+
+Spec risk 3. Tried on 2026-11-09 with Laravel installer 5.32.0.
+
+### What was built
+
+`laravel new cookbook --react --pest --no-authentication --no-boost --database=sqlite --npm -n`, moved into the repository root. The `--no-authentication` flag gives the React kit without Fortify, auth pages or auth routes, so nothing had to be removed by hand. The resolved framework is Laravel v13.40.0 (`composer.lock`). Laravel Boost was left out because the spec does not name it.
+
+Two differences from the plan, both decided by the user on 2026-11-09:
+
+- Both React kits (with and without auth) now use Vite+ (`vite-plus` 1.4.0) as the JS toolchain: `vp build`, `vp test` (Vitest 5.0.5), `vp lint` (oxlint 1.89.0), `vp fmt` (oxfmt 0.74.0) and `vp check` for all three, per `npx vp toolchain`. There is no ESLint. Decision: follow Vite+ and do not add ESLint. Vitest settings live in the `test` block of `vite.config.ts` as the Vite+ docs recommend (`node_modules/vite-plus/docs/guide/test.md`), so there is no `vitest.config.ts`, and tests import from `vite-plus/test`.
+- The kit without auth ships no shadcn/ui (no `components.json`, no components). The full kit has 26 shadcn components but also Fortify, passkeys and two-factor auth. Decision: keep the no-auth kit and run `npx shadcn@latest init -t laravel -b radix -p nova`. That wrote `components.json` (style `radix-nova`, base colour neutral, lucide icons), `resources/js/components/ui/button.tsx` and theme variables in `resources/css/app.css`, and added `radix-ui`, `class-variance-authority`, `lucide-react`, `tw-animate-css`, `@fontsource-variable/geist`, `cn` (shadcn's class merge package, repository `shadcn-ui/cn`) and `shadcn`. Nova is the CLI's default preset; I picked it because the init prompts for one.
+
+NativePHP: `composer require nativephp/desktop` resolved `^2.4`, then `php artisan native:install -n` downloaded the PHP 8.4 binary for mac-arm64, installed Electron under `vendor/nativephp/desktop/resources/electron`, published `config/nativephp.php` and `app/Providers/NativeAppServiceProvider.php`, and added the `native:dev` composer script and a `native:install --force --quiet` post-update hook.
+
+Test tooling: `@testing-library/react`, `@testing-library/dom` and `jsdom` (jsdom approved by the user) as dev dependencies, with `resources/js/smoke.test.tsx` rendering the shadcn button.
+
+### Problems found
+
+- The kit ships a `pnpm-workspace.yaml`. The shadcn CLI saw it and installed with pnpm, writing a `pnpm-lock.yaml` and leaving `package-lock.json` without the new packages. I deleted both pnpm files and reran `npm install`, so npm is the only package manager.
+- The kit's `.gitignore` ignores `/.claude`. I kept the repository's own `.claude/skill-workspace/` rule instead of the blanket one, so `.claude/rules/` can be committed later. The kit's nested `.gitignore` files (`database/`, `bootstrap/cache/`, `storage/...`) are kept as generated.
+- shadcn's `components.json` and `app.css` and NativePHP's provider stub failed the formatters as generated; `vp fmt` and `pint` fixed them.
+- The root view loads Instrument Sans through `laravel-vite-plugin/fonts` with `bunny(...)`, a remote font service. Step 4.10 replaces it.
+
+### Result
+
+All of these pass on the clean scaffold: `./vendor/bin/pest` (2 tests), `npx vp test` (1 test), `npx vp check` (format and lint), `npx tsc --noEmit`, `./vendor/bin/pint --test` and `npm run build`.
+
+`php artisan native:run --no-interaction` started Electron from `vendor/nativephp/desktop/resources/electron` and PHP's server on `127.0.0.1:8100` (`lsof -iTCP -sTCP:LISTEN`). The user confirmed the window showed the starter welcome page. No screenshot is committed: `screencapture -l <window id>` failed with "could not create image from window" because the terminal has no screen recording permission.
+
+Decision: the starter kit and NativePHP fit together. The fallback (plain Laravel with Inertia added by hand) is not needed.
