@@ -170,7 +170,7 @@ Spec risk 4. Tried on 2026-11-09 on macOS 27.0.1 (build 26A434).
 
 ### Build on GitHub Actions
 
-`.github/workflows/spike-dmg.yml` runs on `macos-latest` on pushes to `feature/m1-spikes` (GitHub only offers `workflow_dispatch` for workflow files on the default branch, which this one is not). Run 42669608180 was green in about 8 minutes and uploaded `Cookbook-1.0.0-arm64.dmg` (146 MB). App name and bundle id come from `.env.example`: `APP_NAME=Cookbook`, `NATIVEPHP_APP_ID=be.matsevh.cookbook` (user decision).
+`.github/workflows/spike-dmg.yml` runs on `macos-latest` on pushes to `feature/m1-spikes` (GitHub only offers `workflow_dispatch` for workflow files on the default branch, which this one is not). Run 42669608180 was green in 5 minutes 29 seconds (`run_duration_ms: 329000`) and uploaded `Cookbook-1.0.0-arm64.dmg` (146 MB). App name and bundle id come from `.env.example`: `APP_NAME=Cookbook`, `NATIVEPHP_APP_ID=be.matsevh.cookbook` (user decision).
 
 Without Apple credentials the build does not fail. The log shows `falling back to ad-hoc signature for macOS application code signing`, `identityName=-`, and `skipping notarizing, NATIVEPHP_APPLE_ID, NATIVEPHP_APPLE_ID_PASS and NATIVEPHP_APPLE_TEAM_ID env variables must be set.` It also warns `* * * INSECURE BUILD * * * Secure app bundle not found! Building with exposed source files.` (https://nativephp.com/docs/publishing/building#security), which Milestone 8 has to look at.
 
@@ -194,3 +194,19 @@ Without Apple credentials the build does not fail. The log shows `falling back t
 ### Decision
 
 The free route works, with one change: the DMG as built does not open, because ad-hoc signing with the hardened runtime breaks library validation. Re-signed ad hoc without the hardened runtime, the installed app opens, stays alive with its window closed, serves MCP and starts at login. How the release workflow produces that build (an ad-hoc re-sign step after `native:build`, or adding `com.apple.security.cs.disable-library-validation`) is a revisit decision for the Step 1.7 gate.
+
+## Minutes and updater
+
+Spec risks 5 and 6. Checked on 2026-11-09.
+
+### Actions minutes
+
+GitHub's runner reference (https://docs.github.com/en/actions/reference/runners/github-hosted-runners) says: "Use of the standard GitHub-hosted runners is free and unlimited on public repositories." Larger runners are billed, also for public repositories (https://docs.github.com/en/billing/concepts/product-billing/github-actions). The Step 1.5 run confirms it: the job ran on the label `macos-latest`, and `gh api /repos/Matse2005/cookbook/actions/runs/42669608180/timing` returned `{"billable":{"MACOS":{"total_ms":0,...}},"run_duration_ms":329000}`, so 5.5 minutes of macOS time billed as zero. Every workflow keeps to standard labels (`macos-latest`, `ubuntu-latest`). The run also carried the annotation that macOS arm64 jobs may queue longer because of capacity.
+
+### Updater
+
+From https://nativephp.com/docs/desktop/2/publishing/updating: "macOS: Automatic updating is only supported for signed applications" and "The updater will only run when your app is running in production mode." The page does not mention notarization, so whether notarization is required on top of signing is unconfirmed.
+
+The published `config/nativephp.php` (https://nativephp.com/docs/desktop/2/getting-started/configuration) configures the updater with `NATIVEPHP_UPDATER_ENABLED` (default `true`) and `NATIVEPHP_UPDATER_PROVIDER` (default `spaces`). The `github` provider reads `GITHUB_REPO`, `GITHUB_OWNER`, `GITHUB_TOKEN`, `GITHUB_V_PREFIXED_TAG_NAME` (default `true`), `GITHUB_PRIVATE` (default `false`), `GITHUB_AUTOUPDATE_TOKEN` (read-only token for private repositories), `GITHUB_CHANNEL` (default `latest`) and `GITHUB_RELEASE_TYPE` (default `draft`). `GITHUB_*` is in `cleanup_env_keys`, so those values are stripped from the bundled `.env`.
+
+Spec risk 6 (the updater switches on cleanly once signing exists) cannot be tested without an Apple Developer ID and stays unverified. One thing for Milestone 8: the updater defaults to enabled, so the unsigned release build should set `NATIVEPHP_UPDATER_ENABLED=false` until signing exists, and the in-app banner from Step 8.3 does the update notice instead. Whether the enabled updater causes errors in the current unsigned build was not checked.
